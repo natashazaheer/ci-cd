@@ -28,3 +28,10 @@ Simple Python Flask web application with automated CI/CD pipeline using GitHub A
 │   ├── main.yml             # CI Pipeline
 │   └── deploy.yml           # CD Pipeline
 └── README.md                # This file
+
+
+Reference Articles Used
+
+https://medium.com/@pathirage/step-in-to-ci-cd-a-hands-on-guide-to-building-ci-cd-pipeline-with-github-actions-7490d6f7d8ff
+
+https://medium.com/@flymingotech/how-to-set-up-continuous-deployment-with-github-actions-2025-guide-e84aa6e379ac
