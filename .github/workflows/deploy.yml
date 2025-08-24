@@ -15,8 +15,9 @@ jobs:
         uses: actions/checkout@v3
 
       - name: Stop any old Flask/gunicorn
+        shell: powershell
         run: |
-          pkill -f "gunicorn|flask run" || true
+          Get-Process | Where-Object { $_.ProcessName -like "*python*" } | Stop-Process -Force -ErrorAction SilentlyContinue
 
       - name: Start app (temp)
         run: |
