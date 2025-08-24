@@ -10,17 +10,22 @@ on:
 jobs:
   build-and-deploy:
     runs-on: self-hosted
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
-
-      - name: Stop any old Flask/gunicorn
-        shell: powershell
-        run: |
-          Get-Process | Where-Object { $_.ProcessName -like "*python*" } | Stop-Process -Force -ErrorAction SilentlyContinue
-
-      - name: Start app (temp)
-        run: |
-          cd /opt/flask-app
-          nohup /opt/flask-app/venv/bin/gunicorn -w 2 -b 0.0.0.0:5000 app:app >/opt/flask-app/out.log 2>&1 &
-
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Download build artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: production-files
+        path: ./deployment
+        github-token: ${{ secrets.KEY }}
+        run-id: ${{ github.event.workflow_run.id }}
+    
+    - name: Deploy to Server
+      run: |
+        echo "Deploying Flask application..."
+        cd deployment
+        echo "Deployment completed successfully!"
