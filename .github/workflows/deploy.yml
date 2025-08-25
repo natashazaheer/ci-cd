@@ -8,15 +8,20 @@ on:
     branches: [ main ]
 
 jobs:
-  build-and-deploy:
+  deploy:
     runs-on: self-hosted
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    
+    env:
+      FLASK_ENV: production
+      FLASK_APP: app.py
+      PORT: 5000
     
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
     
-    - name: Download build artifacts
+    - name: Download artifact from CI
       uses: actions/download-artifact@v4
       with:
         name: production-files
@@ -24,13 +29,29 @@ jobs:
         github-token: ${{ secrets.KEY }}
         run-id: ${{ github.event.workflow_run.id }}
     
-    - name: Deploy to Server
+    - name: Add environment variables
       run: |
-        echo "Deploying Flask application..."
         cd deployment
-        echo "Deployment completed successfully!"
+        echo "FLASK_ENV=${{ env.FLASK_ENV }}" | Out-File -FilePath .env -Encoding utf8
+        echo "FLASK_APP=${{ env.FLASK_APP }}" | Out-File -FilePath .env -Append -Encoding utf8
+        echo "PORT=${{ env.PORT }}" | Out-File -FilePath .env -Append -Encoding utf8
+        echo "Environment variables configured"
+      shell: powershell
+    
+    - name: Stop existing application
+      run: |
+        echo "Stopping any existing Flask application..."
+        Get-Process python -ErrorAction SilentlyContinue | Stop-Process -Force
+        echo "Process cleanup completed"
+      shell: powershell
+    
+    - name: Install dependencies and start application
+      run: |
+        cd deployment
+        python -m pip install --upgrade pip
         pip install -r requirements.txt
         echo "Starting Flask application in background..."
-        start /B python app.py
-        timeout /t 5
+        Start-Process python -ArgumentList "app.py" -WindowStyle Hidden
+        Start-Sleep -Seconds 5
         echo "Flask application started successfully on port ${{ env.PORT }}"
+      shell: powershell
