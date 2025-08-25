@@ -17,7 +17,7 @@ def home():
     </head>
     <body>
         <div class="container">
-            <h1 class="header">🐍 HELLO DEVOPS TEAM:)</h1>
+            <h1 class="header">🐍 HELLO DEVOPS TEAM!h1>
             <p>This is a Python Flask web application running on Ubuntu server!</p>
             <p><strong>Server Details:</strong></p>
             <ul>
