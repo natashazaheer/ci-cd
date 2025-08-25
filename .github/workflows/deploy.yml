@@ -8,15 +8,20 @@ on:
     branches: [ main ]
 
 jobs:
-  build-and-deploy:
+  deploy:
     runs-on: self-hosted
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    
+    env:
+      FLASK_ENV: production
+      FLASK_APP: app.py
+      PORT: 5000
     
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
     
-    - name: Download build artifacts
+    - name: Download artifact from CI
       uses: actions/download-artifact@v4
       with:
         name: production-files
@@ -24,8 +29,25 @@ jobs:
         github-token: ${{ secrets.KEY }}
         run-id: ${{ github.event.workflow_run.id }}
     
-    - name: Deploy to Server
+    - name: Add environment variables
       run: |
-        echo "Deploying Flask application..."
         cd deployment
-        echo "Deployment completed successfully!"
+        echo FLASK_ENV=${{ env.FLASK_ENV }} > .env
+        echo FLASK_APP=${{ env.FLASK_APP }} >> .env
+        echo PORT=${{ env.PORT }} >> .env
+        echo "Environment variables configured"
+    
+    - name: Stop existing application
+      run: |
+        echo "Stopping any existing Flask application..."
+        taskkill /F /IM python.exe 2>nul || echo "No existing Python process found"
+    
+    - name: Install dependencies and start application
+      run: |
+        cd deployment
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        echo "Starting Flask application in background..."
+        start /B python app.py
+        timeout /t 5
+        echo "Flask application started successfully on port ${{ env.PORT }}"
