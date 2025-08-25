@@ -36,11 +36,16 @@ jobs:
         echo FLASK_APP=${{ env.FLASK_APP }} >> .env
         echo PORT=${{ env.PORT }} >> .env
         echo "Environment variables configured"
-    
-    - name: Stop existing application
+    - name: Install dependencies and start application
       run: |
-        echo "Stopping any existing Flask application..."
-        taskkill /F /IM python.exe 2>nul || echo "No existing Python process found"
+        cd deployment
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        echo "Starting Flask application in background..."
+        Start-Process -FilePath "python" -ArgumentList "app.py" -WindowStyle Hidden
+        Start-Sleep -Seconds 5
+        echo "Flask application started successfully on port ${{ env.PORT }}"
+      shell: powershell
     
     - name: Install dependencies and start application
       run: |
