@@ -11,47 +11,102 @@ jobs:
   deploy:
     runs-on: self-hosted
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
-    
+
     env:
-      FLASK_ENV: production
-      FLASK_APP: app.py
       PORT: 5000
-    
+      APP_DIR: deployment
+      VENV: deployment\.venv
+
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-    
-    - name: Download artifact from CI
-      uses: actions/download-artifact@v4
-      with:
-        name: production-files
-        path: ./deployment
-        github-token: ${{ secrets.KEY }}
-        run-id: ${{ github.event.workflow_run.id }}
-    
-    - name: Add environment variables
-      run: |
-        cd deployment
-        echo "FLASK_ENV=${{ env.FLASK_ENV }}" | Out-File -FilePath .env -Encoding utf8
-        echo "FLASK_APP=${{ env.FLASK_APP }}" | Out-File -FilePath .env -Append -Encoding utf8
-        echo "PORT=${{ env.PORT }}" | Out-File -FilePath .env -Append -Encoding utf8
-        echo "Environment variables configured"
-      shell: powershell
-    
-    - name: Stop existing application
-      run: |
-        echo "Stopping any existing Flask application..."
-        Get-Process python -ErrorAction SilentlyContinue | Stop-Process -Force
-        echo "Process cleanup completed"
-      shell: powershell
-    
-    - name: Install dependencies and start application
-      run: |
-        cd deployment
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
-        echo "Starting Flask application in background..."
-        Start-Process python -ArgumentList "app.py" -WindowStyle Hidden
-        Start-Sleep -Seconds 5
-        echo "Flask application started successfully on port ${{ env.PORT }}"
-      shell: powershell
+      - name: Clean previous deployment (except venv)
+        shell: pwsh
+        run: |
+          if (Test-Path "${{ env.APP_DIR }}") {
+            Get-ChildItem "${{ env.APP_DIR }}" -Force | Where-Object { $_.Name -ne ".venv" } | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+          } else {
+            New-Item -ItemType Directory -Path "${{ env.APP_DIR }}" | Out-Null
+          }
+
+      - name: Download artifact (must exist)
+        uses: actions/download-artifact@v4
+        with:
+          name: production-files
+          path: ./deployment
+          github-token: ${{ github.token }}
+          run-id: ${{ github.event.workflow_run.id }}
+          if-no-artifact-found: error
+
+      - name: Verify artifact layout and show app.py snippet + hash
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "${{ env.APP_DIR }}\app.py")) {
+            Write-Error "Expected app.py at '${{ env.APP_DIR }}\app.py' but it was not found. Check the artifact path/nesting."
+            Write-Host "Tree under deployment:"
+            Get-ChildItem -Recurse -Force "${{ env.APP_DIR }}" | ForEach-Object { $_.FullName }
+            exit 1
+          }
+          Write-Host "Top of app.py (for change confirmation):"
+          Get-Content "${{ env.APP_DIR }}\app.py" -First 15 | ForEach-Object { ">> $_" }
+          $h = Get-FileHash "${{ env.APP_DIR }}\app.py" -Algorithm SHA256
+          Write-Host "app.py SHA256: $($h.Hash)"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Create venv & install requirements
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "${{ env.VENV }}")) {
+            python -m venv "${{ env.VENV }}"
+          }
+          "${{ env.VENV }}\Scripts\pip.exe" install --upgrade pip wheel
+          if (Test-Path "${{ env.APP_DIR }}\requirements.txt") {
+            "${{ env.VENV }}\Scripts\pip.exe" install -r "${{ env.APP_DIR }}\requirements.txt"
+          }
+          # Ensure prod server + dotenv
+          "${{ env.VENV }}\Scripts\pip.exe" install waitress python-dotenv
+
+      - name: Stop anything on target port
+        shell: pwsh
+        run: |
+          $p = netstat -ano | Select-String ":${{ env.PORT }} " | ForEach-Object { ($_ -split '\s+')[-1] } | Select-Object -Unique
+          if ($p) {
+            Write-Host "Stopping PID(s): $($p -join ', ')"
+            $p | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }
+            Start-Sleep -Seconds 2
+          } else {
+            Write-Host "No process on port ${{ env.PORT }}"
+          }
+
+      - name: Write .env
+        shell: pwsh
+        run: |
+          "FLASK_ENV=production" | Out-File -FilePath "${{ env.APP_DIR }}\.env" -Encoding utf8
+          "FLASK_APP=app.py"     | Out-File -FilePath "${{ env.APP_DIR }}\.env" -Append -Encoding utf8
+          "PORT=${{ env.PORT }}" | Out-File -FilePath "${{ env.APP_DIR }}\.env" -Append -Encoding utf8
+
+      - name: Start app (Waitress from the correct folder)
+        shell: pwsh
+        working-directory: ${{ env.APP_DIR }}
+        run: |
+          $exe = "..\${{ env.VENV }}\Scripts\waitress-serve.exe"
+          $args = "--port=${{ env.PORT }} app:app"
+          Write-Host "Launching: $exe $args (cwd=$(Get-Location))"
+          Start-Process -FilePath $exe -ArgumentList $args -WindowStyle Hidden
+          Start-Sleep -Seconds 5
+
+      - name: Health check (fail if app didn't start new code)
+        shell: pwsh
+        run: |
+          try {
+            $resp = Invoke-WebRequest -Uri "http://localhost:${{ env.PORT }}/" -UseBasicParsing -TimeoutSec 10
+            if ($resp.StatusCode -ge 200 -and $resp.StatusCode -lt 500) {
+              Write-Host "Health check OK: $($resp.StatusCode)"
+            } else { throw "Unhealthy status code: $($resp.StatusCode)" }
+          } catch {
+            Write-Error "Health check failed: $_"
+            exit 1
+          }
+
