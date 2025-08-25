@@ -3,9 +3,17 @@ name: Deploy to Production
 on:
   workflow_run:
     workflows: ["CI/CD for Flask App"]
-    types:
-      - completed
-    branches: [ main ]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  actions: read
+  contents: read
+
+# Make all run-steps use Windows PowerShell by default
+defaults:
+  run:
+    shell: powershell
 
 jobs:
   deploy:
@@ -19,12 +27,13 @@ jobs:
 
     steps:
       - name: Clean previous deployment (except venv)
-        shell: pwsh
         run: |
-          if (Test-Path "${{ env.APP_DIR }}") {
-            Get-ChildItem "${{ env.APP_DIR }}" -Force | Where-Object { $_.Name -ne ".venv" } | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+          if (Test-Path "$env:APP_DIR") {
+            Get-ChildItem "$env:APP_DIR" -Force |
+              Where-Object { $_.Name -ne ".venv" } |
+              Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
           } else {
-            New-Item -ItemType Directory -Path "${{ env.APP_DIR }}" | Out-Null
+            New-Item -ItemType Directory -Path "$env:APP_DIR" | Out-Null
           }
 
       - name: Download artifact (must exist)
@@ -36,18 +45,17 @@ jobs:
           run-id: ${{ github.event.workflow_run.id }}
           if-no-artifact-found: error
 
-      - name: Verify artifact layout and show app.py snippet + hash
-        shell: pwsh
+      - name: Verify artifact and show app.py snippet + hash
         run: |
-          if (-not (Test-Path "${{ env.APP_DIR }}\app.py")) {
-            Write-Error "Expected app.py at '${{ env.APP_DIR }}\app.py' but it was not found. Check the artifact path/nesting."
+          if (-not (Test-Path "$env:APP_DIR\app.py")) {
+            Write-Error "Expected app.py at '$env:APP_DIR\app.py' but it was not found."
             Write-Host "Tree under deployment:"
-            Get-ChildItem -Recurse -Force "${{ env.APP_DIR }}" | ForEach-Object { $_.FullName }
+            Get-ChildItem -Recurse -Force "$env:APP_DIR" | ForEach-Object { $_.FullName }
             exit 1
           }
           Write-Host "Top of app.py (for change confirmation):"
-          Get-Content "${{ env.APP_DIR }}\app.py" -First 15 | ForEach-Object { ">> $_" }
-          $h = Get-FileHash "${{ env.APP_DIR }}\app.py" -Algorithm SHA256
+          Get-Content "$env:APP_DIR\app.py" -First 15 | ForEach-Object { ">> $_" }
+          $h = Get-FileHash "$env:APP_DIR\app.py" -Algorithm SHA256
           Write-Host "app.py SHA256: $($h.Hash)"
 
       - name: Set up Python
@@ -56,39 +64,32 @@ jobs:
           python-version: '3.11'
 
       - name: Create venv & install requirements
-        shell: pwsh
         run: |
-          if (-not (Test-Path "${{ env.VENV }}")) {
-            python -m venv "${{ env.VENV }}"
+          if (-not (Test-Path "$env:VENV")) { python -m venv "$env:VENV" }
+          "$env:VENV\Scripts\pip.exe" install --upgrade pip wheel
+          if (Test-Path "$env:APP_DIR\requirements.txt") {
+            "$env:VENV\Scripts\pip.exe" install -r "$env:APP_DIR\requirements.txt"
           }
-          "${{ env.VENV }}\Scripts\pip.exe" install --upgrade pip wheel
-          if (Test-Path "${{ env.APP_DIR }}\requirements.txt") {
-            "${{ env.VENV }}\Scripts\pip.exe" install -r "${{ env.APP_DIR }}\requirements.txt"
-          }
-          # Ensure prod server + dotenv
-          "${{ env.VENV }}\Scripts\pip.exe" install waitress python-dotenv
+          "$env:VENV\Scripts\pip.exe" install waitress python-dotenv
 
       - name: Stop anything on target port
-        shell: pwsh
         run: |
-          $p = netstat -ano | Select-String ":${{ env.PORT }} " | ForEach-Object { ($_ -split '\s+')[-1] } | Select-Object -Unique
-          if ($p) {
-            Write-Host "Stopping PID(s): $($p -join ', ')"
-            $p | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }
+          $pids = netstat -ano | Select-String ":$($env:PORT)\s" | ForEach-Object { ($_ -split '\s+')[-1] } | Select-Object -Unique
+          if ($pids) {
+            Write-Host "Stopping PID(s): $($pids -join ', ')"
+            $pids | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }
             Start-Sleep -Seconds 2
           } else {
-            Write-Host "No process on port ${{ env.PORT }}"
+            Write-Host "No process on port $env:PORT"
           }
 
       - name: Write .env
-        shell: pwsh
         run: |
-          "FLASK_ENV=production" | Out-File -FilePath "${{ env.APP_DIR }}\.env" -Encoding utf8
-          "FLASK_APP=app.py"     | Out-File -FilePath "${{ env.APP_DIR }}\.env" -Append -Encoding utf8
-          "PORT=${{ env.PORT }}" | Out-File -FilePath "${{ env.APP_DIR }}\.env" -Append -Encoding utf8
+          "FLASK_ENV=production" | Out-File -FilePath "$env:APP_DIR\.env" -Encoding utf8
+          "FLASK_APP=app.py"     | Out-File -FilePath "$env:APP_DIR\.env" -Append -Encoding utf8
+          "PORT=$env:PORT"       | Out-File -FilePath "$env:APP_DIR\.env" -Append -Encoding utf8
 
-      - name: Start app (Waitress from the correct folder)
-        shell: pwsh
+      - name: Start app (Waitress)
         working-directory: ${{ env.APP_DIR }}
         run: |
           $exe = "..\${{ env.VENV }}\Scripts\waitress-serve.exe"
@@ -96,9 +97,9 @@ jobs:
           Write-Host "Launching: $exe $args (cwd=$(Get-Location))"
           Start-Process -FilePath $exe -ArgumentList $args -WindowStyle Hidden
           Start-Sleep -Seconds 5
+          Write-Host "App started on http://localhost:${{ env.PORT }}/"
 
-      - name: Health check (fail if app didn't start new code)
-        shell: pwsh
+      - name: Health check
         run: |
           try {
             $resp = Invoke-WebRequest -Uri "http://localhost:${{ env.PORT }}/" -UseBasicParsing -TimeoutSec 10
@@ -109,4 +110,3 @@ jobs:
             Write-Error "Health check failed: $_"
             exit 1
           }
-
